@@ -1,0 +1,380 @@
+enum LayerStatus {
+  active
+  inactive
+  deprecated
+  draft
+}
+
+enum LayerVisibility {
+  private
+  public
+  organization
+}
+
+enum LayerEnvironment {
+  production
+  staging
+  development
+}
+
+enum LayerDeploymentStatus {
+  in_progress
+  success
+  failed
+  cancelled
+}
+
+enum LayerCollaboratorRole {
+  owner
+  editor
+  viewer
+}
+
+enum LayerPurchaseStatus {
+  pending
+  completed
+  failed
+  cancelled
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("POSTGRES_PRISMA_URL") // uses connection pooling
+  directUrl = env("POSTGRES_URL_NON_POOLING") // uses a direct connection
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String        @unique
+  name          String?
+  settings      UserSettings?
+  conversations Conversation[]
+  layers        Layer[]        // User's created layers
+  purchases     LayerPurchase[] // User's purchased layers
+  apiKeys       ApiKey[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  subscriptions Subscription[]
+  usages        Usage[]
+  collaborations LayerCollaborator[]
+  auditLogs      LayerAuditLog[]
+}
+
+model UserSettings {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id])
+  defaultModel        String   @default("claude-3-opus-20240229")
+  defaultMaxTokens    Int      @default(1024)
+  defaultTemperature  Float    @default(0.7)
+  enabledTools        String[] @default([])
+  enabledResources    String[] @default([])
+  enabledLayers       String[] @default([])
+}
+
+model Conversation {
+  id          String    @id @default(cuid())
+  title       String
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  messages    Message[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  isArchived  Boolean   @default(false)
+  metadata    Json?     // Store any additional conversation metadata
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  role           String      // user/assistant
+  content        String      // The actual message content
+  toolCalls      ToolCall[]  // Related tool calls
+  resources      Resource[]   // Resources referenced in this message
+  metadata       Json?       // Additional message metadata
+  createdAt      DateTime    @default(now())
+}
+
+model ToolCall {
+  id        String   @id @default(cuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id])
+  name      String   // Name of the tool called
+  args      Json     // Arguments passed to the tool
+  result    Json?    // Result returned by the tool
+  status    String   // success/error/pending
+  error     String?  // Error message if status is error
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Resource {
+  id        String    @id @default(cuid())
+  messageId String
+  message   Message   @relation(fields: [messageId], references: [id])
+  uri       String    // Resource URI
+  content   String    // Resource content
+  mimeType  String?   // MIME type of the resource
+  metadata  Json?     // Additional resource metadata
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Layer {
+  id            String          @id @default(cuid())
+  name          String
+  version       String
+  description   String?
+  author        String
+  category      String
+  tags          String[]
+  status        LayerStatus     @default(inactive)
+  runtime       String         // edge, docker, node
+  entry         String         // Entry point URL/path
+  dependencies  String[]       // Required features/dependencies
+  tools         Json          // Array of tool definitions
+  resources     Json          // Array of resource definitions
+  prompts       Json          // Array of prompt templates
+  config        Json          // Layer configuration
+  metadata      Json          // Additional metadata
+  state         Json?         // Runtime state
+  capabilities  Json          // Layer capabilities
+  metrics       Json?         // Performance metrics
+  price         Json?         // Pricing information
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  purchases     LayerPurchase[]
+  integrations  LayerIntegration[]
+  events        LayerEvent[]
+  reviews       LayerReview[]
+  analytics     LayerAnalytics[]
+  versions      LayerVersion[]
+  dependsOn     LayerDependency[] @relation("dependent")
+  dependedOnBy  LayerDependency[] @relation("dependency")
+  usages        Usage[]
+  collaborators LayerCollaborator[]
+  deployments   LayerDeployment[]
+  auditLogs     LayerAuditLog[]
+  visibility    LayerVisibility @default(private)
+  organizationId  String?   // for organization-wide layers
+  settings      Json?     // layer-specific settings
+  code          String    // Add this
+  parameters  Json      // Add this
+
+  @@index([category])
+  @@index([status])
+  @@index([tags])
+}
+
+model LayerPurchase {
+  id          String            @id @default(cuid())
+  layerId     String
+  layer       Layer            @relation(fields: [layerId], references: [id])
+  userId      String
+  user        User             @relation(fields: [userId], references: [id])
+  amount      Float
+  currency    String
+  interval    String?          // monthly, yearly, one-time
+  status      LayerPurchaseStatus
+  validUntil  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([userId, layerId])
+  @@index([status])
+}
+
+model LayerIntegration {
+  id          String    @id @default(cuid())
+  layerId     String
+  layer       Layer     @relation(fields: [layerId], references: [id])
+  serverId    String    // MCP server ID
+  config      Json      // Integration configuration
+  status      String    @default("pending")
+  error       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([layerId, serverId])
+}
+
+model LayerEvent {
+  id          String    @id @default(cuid())
+  layerId     String
+  layer       Layer     @relation(fields: [layerId], references: [id])
+  type        String    // installed, updated, removed, error, etc.
+  data        Json?     // Event-specific data
+  createdAt   DateTime  @default(now())
+
+  @@index([layerId, type])
+}
+
+model LayerReview {
+  id          String    @id @default(cuid())
+  layerId     String
+  layer       Layer     @relation(fields: [layerId], references: [id])
+  userId      String
+  rating      Int       // 1-5
+  comment     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([layerId, userId])
+}
+
+model LayerAnalytics {
+  id          String    @id @default(cuid())
+  layerId     String
+  layer       Layer     @relation(fields: [layerId], references: [id])
+  date        DateTime  @default(now())
+  metrics     Json      // Daily metrics
+  
+  @@unique([layerId, date])
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  key         String    @unique
+  name        String?
+  permissions String[]
+  lastUsed    DateTime?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+
+  @@index([userId])
+}
+
+// Billing & Subscriptions
+model Subscription {
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id])
+  planId            String
+  plan              Plan      @relation(fields: [planId], references: [id])
+  status            String    // active, cancelled, past_due
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAt          DateTime?
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([userId, status])
+}
+
+model Plan {
+  id            String         @id @default(cuid())
+  name          String
+  description   String?
+  price         Float
+  currency      String
+  interval      String        // monthly, yearly
+  features      String[]
+  limits        Json          // API limits, storage limits, etc.
+  isActive      Boolean       @default(true)
+  subscriptions Subscription[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+// Layer Development
+model LayerVersion {
+  id          String    @id @default(cuid())
+  layerId     String
+  layer       Layer     @relation(fields: [layerId], references: [id])
+  version     String
+  changelog   String?
+  source      Json      // Source code/configuration
+  isPublic    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([layerId, version])
+}
+
+model LayerDependency {
+  id            String    @id @default(cuid())
+  layerId       String
+  layer         Layer     @relation("dependent", fields: [layerId], references: [id])
+  dependencyId  String
+  dependency    Layer     @relation("dependency", fields: [dependencyId], references: [id])
+  version       String
+  isOptional    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  @@unique([layerId, dependencyId])
+}
+
+// Usage & Analytics
+model Usage {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  layerId     String?
+  layer       Layer?    @relation(fields: [layerId], references: [id])
+  type        String    // api_call, storage, compute, etc.
+  quantity    Float
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, type, createdAt])
+  @@index([layerId, type, createdAt])
+}
+
+/// Manages layer collaboration and access control
+model LayerCollaborator {
+  id          String               @id @default(cuid())
+  layerId     String
+  layer       Layer               @relation(fields: [layerId], references: [id])
+  userId      String
+  user        User                @relation(fields: [userId], references: [id])
+  role        LayerCollaboratorRole
+  permissions String[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([layerId, userId])
+  @@index([role])
+}
+
+/// Tracks layer deployments across environments
+model LayerDeployment {
+  id          String               @id @default(cuid())
+  layerId     String
+  layer       Layer               @relation(fields: [layerId], references: [id])
+  environment LayerEnvironment
+  version     String
+  status      LayerDeploymentStatus
+  config      Json
+  metadata    Json?
+  logs        Json?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([layerId, environment])
+  @@index([status])
+}
+
+/// Audit logging for layer operations
+model LayerAuditLog {
+  id          String    @id @default(cuid())
+  layerId     String
+  layer       Layer     @relation(fields: [layerId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  action      String    // created, updated, deleted, etc.
+  details     Json      // action-specific details
+  createdAt   DateTime  @default(now())
+
+  @@index([layerId, action])
+  @@index([userId, createdAt])
+} 
