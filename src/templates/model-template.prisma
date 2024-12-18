@@ -1,0 +1,5 @@
+// model ComponentName is a placeholder. Replace fields as needed.
+model ComponentName {
+  id   String @id @default(cuid())
+  name String
+}
